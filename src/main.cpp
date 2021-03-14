@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Servo.h>
+
 #include <Display.h>
+#include <Button.h>
 
 /*
  * Utilisation:
@@ -11,7 +13,6 @@
 
 
 // #define DEBUG_SER
-// #define USE_INT_SW
 
 #define PIN_ENCS          2 // INT0
 #define PIN_ENCA          3 // INT1
@@ -26,6 +27,7 @@
 
 Servo myservo;               // Crée un objet servo pour contrôler un servomoteur
 Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
+Button encbtn(PIN_ENCS);
 
 unsigned int stepsRemaining; // Nombre de pas restant
 unsigned long digitAt;
@@ -33,13 +35,7 @@ bool doit;
 bool walking;
 bool footUp;
 unsigned long stepAt;
-unsigned long buttonChangedAt, buttonPressedDuration;
-bool buttonPressed, buttonReleased;
-bool buttonWaitRelease;
-bool btnShortPressed, btnLongPressed;
 
-volatile bool btnPressed;
-volatile unsigned long pressedAt;
 volatile unsigned long rotatedAt;
 volatile int rot;
 
@@ -49,7 +45,6 @@ volatile int rot;
 #define LONG_PRESS           1000
 
 #define DEBOUNCE_TIME           5
-#define SHORT_PRESS            10
 #define DIGIT_TIMEOUT       10000
 
 #define SPEED_WALK            600
@@ -67,107 +62,12 @@ volatile int rot;
 /*
  * Méthodes appelées dans des interruptions. *********************************
  */
-// Méthode appelée quand le bouton est enfoncé
-void onButtonPressed() {
-  unsigned long interval = millis() - pressedAt;
-#ifdef DEBUG_SER
-  Serial.print(" vvv");
-  Serial.print(interval);
-#endif
-  if (interval > SHORT_PRESS)
-  {
-    pressedAt = millis();
-#ifdef DEBUG_SER
-    Serial.write('S');
-  }
-  else
-  {
-    Serial.write(' ');
-#endif
-  }
-#ifdef DEBUG_SER
-  Serial.print("vvv ");
-#endif
-}
-
-// Méthode appelée quand le bouton est relâché
-void onButtonReleased() {
-  unsigned long interval = millis() - pressedAt;
-#ifdef DEBUG_SER
-  Serial.print(" ^^^");
-  Serial.print(interval);
-#endif
-  if (interval > LONG_PRESS)
-  {
-    btnLongPressed = true;
-    btnShortPressed = false;
-#ifdef DEBUG_SER
-    Serial.write0('L');
-#endif
-  }
-  else if (interval > SHORT_PRESS)
-  {
-    btnLongPressed = false;
-    btnShortPressed = true;
-#ifdef DEBUG_SER
-    Serial.write('S');
-  }
-  else
-  {
-    Serial.write(' ');
-#endif
-  }
-#ifdef DEBUG_SER
-  Serial.print("^^^ ");
-#endif
-}
-
-// Interruption déclenchée à quaque fois que le bouton change d'état
-void onButtonChanged() {
-  if ((millis() - pressedAt) > DEBOUNCE_TIME)
-  { // Debounce
-    btnPressed = digitalRead(PIN_ENCS);
-    pressedAt = millis();
-    // if (btnPressed)
-    // {
-    //   onButtonReleased();
-    // }
-    // else
-    // {
-    //   onButtonPressed();
-    // }
-  }
-}
-
 // Interruption déclenchée à chaque fois que l'encodeur est tourné
 void onEncoderTurned() {
   if ((millis() - rotatedAt) > DEBOUNCE_TIME)
   { // Debounce
     rot += digitalRead(PIN_ENCB)?-1:1;
     rotatedAt = millis();
-  }
-}
-
-// Vérifie l'état du bouton
-void checkButton() {
-  bool btn = digitalRead(PIN_ENCS);
-  unsigned long now = millis();
-  if ((btn == buttonPressed) && ((now - buttonChangedAt) > DEBOUNCE_TIME))
-  {
-    if (btn)
-    {
-      buttonPressed = false;
-      buttonReleased = true;
-      buttonPressedDuration = now - buttonChangedAt;
-    }
-    else
-    {
-      buttonPressed = true;
-      buttonReleased = false;
-      buttonPressedDuration = 0;
-    }
-    buttonChangedAt = now;
-    buttonPressed = !btn;
   }
 }
 
@@ -215,11 +115,11 @@ bool walk()
   return false;
 }
 
+
 /*****************************************************************************
  * Initialisation ------------------------------------------------------------
  *****************************************************************************/
 void setup() {
-  bool factoryDefault = true;
 #ifdef DEBUG_SER
   Serial.begin(9600);
 #endif
@@ -229,10 +129,7 @@ void setup() {
   stepsRemaining = STEPS_INIT;
   doit = false;
   rot = 0;
-  btnShortPressed = false;
-  btnLongPressed = false;
   digitAt = 0;
-  pressedAt = 0;
   rotatedAt = 0;
   walking = false;
 
@@ -240,14 +137,14 @@ void setup() {
   digitalWrite(PIN_BUZZER, LOW);
   pinMode(PIN_ENCA, INPUT);
   pinMode(PIN_ENCB, INPUT);
-  pinMode(PIN_ENCS, INPUT_PULLUP);
   
   // Lamp test
   disp.lampTest();
 
+  bool factoryDefault = encbtn.isPressed();
   while (millis() < 2000)
   {
-    if (digitalRead(PIN_ENCS))
+    if (encbtn.isReleased())
     {
       factoryDefault = false;
     }
@@ -266,13 +163,10 @@ void setup() {
     }
 
     // Attends que le bouton soit relâché
-    do {
-      if (!digitalRead(PIN_ENCS))
-      {
-        digitAt = millis();
-      }
+    while (!encbtn.isReleased())
+    {
       disp.displayNextDigit();
-    } while ((millis() - digitAt) < 100);
+    }
   }
 
   // Efface l'écran complètement, points inclus
@@ -281,20 +175,11 @@ void setup() {
   disp.write(stepsRemaining);
 
   // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
-  #ifdef USE_INT_SW
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCS), onButtonChanged, CHANGE);
-  #endif
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
 
   // timer1 (TCCR1) utilisé par le servo moteur
   digitalWrite(LED_BUILTIN, LOW);
-  btnShortPressed = false;
-  btnLongPressed = false;
-
-  buttonWaitRelease = false;
-  buttonPressed = false;
-  buttonReleased = false;
-  buttonChangedAt = 0;
+  encbtn.handled();
 }
 
 /*****************************************************************************
@@ -318,10 +203,8 @@ void loop() {
   */
 
   disp.displayNextDigit();
+  encbtn.check();
   digitalWrite(LED_BUILTIN, doit);
-#ifndef USE_INT_SW
-  checkButton();
-#endif
 
 #ifdef DEBUG_SER
   Serial.print(doit);
@@ -336,6 +219,7 @@ void loop() {
   Serial.print(stepsRemaining);
   Serial.print(" ");
 #endif
+
   if (doit)
   {
     if (walk())
@@ -351,70 +235,29 @@ void loop() {
         digitalWrite(PIN_BUZZER, LOW);
       }
     }
-#ifdef USE_INT_SW
-    if (btnShortPressed || btnLongPressed)
-#else
-    if (buttonPressed)
-#endif
+
+    if (encbtn.isPressed())
     {
-#ifndef USE_INT_SW
-      buttonWaitRelease = true;
-#endif
+      encbtn.handled();
       doit = false;
-      digitalWrite(PIN_BUZZER, LOW);
-      disp.blankScreen = false;
-      disp.hideLeadingZeros();
-      stepsRemaining = STEPS_INIT;
-      disp.hideCursor();
-      disp.setCursor(3);
-      disp.write(stepsRemaining);
-#ifdef USE_INT_SW
-      btnShortPressed = false;
-      btnLongPressed = false;
-#endif
+      if (stepsRemaining == 0)
+      {
+        digitalWrite(PIN_BUZZER, LOW);
+        stepsRemaining = STEPS_INIT;
+        disp.blankScreen = false;
+        disp.hideLeadingZeros();
+        disp.hideCursor();
+        disp.setCursor(3);
+        disp.write(stepsRemaining);
+      }
     }
+
   }
   else
   {
-#ifdef USE_INT_SW
-    if (btnLongPressed)
+    if (encbtn.isReleased())
     {
-      if (stepsRemaining > 0)
-      {
-        doit = true;
-        cursorPos = CURSOR_MAX;
-      }
-      cursorPos |= 0x80;  // Cache le curseur
-      btnLongPressed = false;
-    }
-    else if (btnShortPressed)
-    {
-      digitAt = millis();
-      if (cursorPos & 0x80)
-      {
-        cursorPos &= 0x7f;  // Affiche le curseur
-      }
-      else
-      {
-        if (cursorPos > 0)
-        { 
-          cursorPos--;
-        }
-        else
-        {
-          cursorPos = CURSOR_MAX;
-        }
-      }
-      btnShortPressed = false;
-    }
-#else
-    if (buttonReleased)
-    {
-      if (buttonWaitRelease)
-      {
-        buttonWaitRelease = false;
-      }
-      else if (buttonPressedDuration > LONG_PRESS)
+      if (encbtn.getPressedDuration() > LONG_PRESS)
       {
         if (stepsRemaining > 0)
         {
@@ -428,10 +271,8 @@ void loop() {
         digitAt = millis();
         disp.moveCursor(false);
       }
-      buttonReleased = false;
       disp.writeDot(DOT_LONGPRESS, false);
     }
-#endif
     else if ((rot != 0) && disp.isCursorVisible())
     { // Si encodeur tourné et curseur affiché
       digitAt = millis();
@@ -477,7 +318,7 @@ void loop() {
         disp.write(stepsRemaining);
       }
     }
-    else if (buttonPressed && ((millis() - buttonChangedAt) > LONG_PRESS))
+    else if (encbtn.isPressed() && (encbtn.getPressedDuration() > LONG_PRESS))
     {
       disp.writeDot(DOT_LONGPRESS, true);
     }
