@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Servo.h>
+#include <Display.h>
 
 /*
  * Utilisation:
@@ -11,7 +12,6 @@
 
 // #define DEBUG_SER
 // #define USE_INT_SW
-#define USE_CD4017
 
 #define PIN_ENCS          2 // INT0
 #define PIN_ENCA          3 // INT1
@@ -19,26 +19,19 @@
 #define PIN_SR_DI         5
 #define PIN_SR_CK         6
 #define PIN_SR_ST         7
+#define PIN_CD4017_MR     8
 #define PIN_DIGIT_ENA     9
 #define PIN_SERVO        10
 #define PIN_BUZZER       11
-#ifdef USE_CD4017
-#define PIN_CD4017_MR     8
-#else
-#define PIN_DIGIT_ADDR0  A0
-#define PIN_DIGIT_ADDR1   8
-#define PIN_DIGIT_ADDR2  12
-#endif
 
 Servo myservo;               // Crée un objet servo pour contrôler un servomoteur
+Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
+
 unsigned int stepsRemaining; // Nombre de pas restant
-uint16_t cursorPos;          // Position du curseur. Si le bit 7 est à 1, il n'est pas affiché.
-bool blankScreen;            // Indique si l'affichage doit être éteint
 unsigned long digitAt;
 bool doit;
 bool walking;
 bool footUp;
-bool leadingZeros;
 unsigned long stepAt;
 unsigned long buttonChangedAt, buttonPressedDuration;
 bool buttonPressed, buttonReleased;
@@ -58,48 +51,17 @@ volatile int rot;
 #define DEBOUNCE_TIME           5
 #define SHORT_PRESS            10
 #define DIGIT_TIMEOUT       10000
-#define CURSOR_BLINK_PERIOD   400
 
 #define SPEED_WALK            600
 #define SPEED_RUN             150
 #define STEPS_INIT           1000
 #define STEPS_MAX           20000
-#define DIGIT_MAX               5
-#define CURSOR_MAX              3
 
 #define DOT_STEP                0
 #define DOT_SPEED               1
 #define DOT_TIME                2
 #define DOT_RESERVED            3
 #define DOT_LONGPRESS           4
-
-uint8_t digits[DIGIT_MAX], digitNum;
-
-/*
- * Tables de caractères
- * Les segments sont dans l'ordre classiques: a b c d e f g dp
- * Caractères disponibles: 0 1 2 3 4 5 6 7 8 9 A B C D E F
- */
-uint8_t segments[] = {
-  0xfc, // 0: b11111100
-  0x60, // 1: b01100000
-  0xda, // 2: b11011010
-  0xf2, // 3: b11110010
-  0x66, // 4: b01100110
-  0xb6, // 5: b10110110
-  0xbe, // 6: b10111110
-  0xe0, // 7: b11100000
-  0xfe, // 8: b11111110
-  0xf6, // 9: b11110110
-  0xee, // A: b11101110
-  0x3e, // b: b00111110
-  0x1a, // c: b00011010
-  0x7a, // d: b01111010
-  0x9e, // E: b10011110
-  0x8e, // F: b10001110
-  0x02  // -: b00000010
-};
-
 
 
 /*
@@ -210,112 +172,6 @@ void checkButton() {
 }
 
 
-// Retourne 10 à la puissance value
-unsigned int powerTen(uint8_t value)
-{
-  unsigned int pow = 1;
-  while (value > 0)
-  {
-    pow *= 10;
-    value--;
-  }
-  return pow;
-}
-
-
-/*
- * Méthodes de gestion des afficheurs. ****************************************
- */
-// Met à jour la mémoire d'affichage avec la valeur de stepRemaining (conserve les points)
-void updateDisplayMemory() {
-  bool blank = !leadingZeros;
-#ifdef DEBUG_SER
-  Serial.print("Afficheur: [");
-#endif
-  uint16_t p = DIGIT_MAX;
-  do {
-    p--;
-    digits[p] &= 0x01; // conserve l'état du point
-    uint16_t digit = (stepsRemaining / powerTen(p)) % 10;
-    if ((digit > 0) || (p == 0))
-    {
-      blank = false;
-    }
-    if (!blank)
-    {
-      digits[p] |= segments[digit];
-    }
-#ifdef DEBUG_SER
-    Serial.write(c);
-#endif
-  } while (p > 0);
-#ifdef DEBUG_SER
-  Serial.print(']');
-#endif
-}
-
-// Met à jour le point du chiffre indiqué
-void writeDot(uint8_t digit, bool value) {
-  if (digit < DIGIT_MAX)
-  {
-    if (value)
-    {
-      digits[digit] |= 0x01;
-    }
-    else
-    {
-      digits[digit] &= 0xfe;
-    }
-  }
-}
-
-// Affiche le chiffre suivant en utilisant du multiplexage
-void displayNextDigit() {
-  static bool showScreen;
-  uint8_t digit;
-  bool cursorBlinkOn = (millis() % CURSOR_BLINK_PERIOD) < (CURSOR_BLINK_PERIOD / 2);
-  bool isDigit0 = (digitNum == 0);
-
-  if (isDigit0)
-  {
-    showScreen = !blankScreen;
-  }
-  digitalWrite(PIN_DIGIT_ENA, LOW);
-#ifdef USE_CD4017
-  digitalWrite(PIN_CD4017_MR, isDigit0);
-#else
-  digitalWrite(PIN_DIGIT_ADDR0, bitRead(digitNum, 0));
-  digitalWrite(PIN_DIGIT_ADDR1, bitRead(digitNum, 1));
-  digitalWrite(PIN_DIGIT_ADDR2, bitRead(digitNum, 2));
-#endif
-  if (cursorBlinkOn && (cursorPos == digitNum))
-  { // Curseur visible
-    digit = 0x10;
-  }
-  else
-  {
-    digit = digits[digitNum];
-  }
-  // if ((digitNum == 4) && !(cursorPos & 0x80) && cursorBlinkOn)
-  // {
-  //   digit |= 0x01;
-  // }
-  for(int i=0; i<8; i++)
-  {
-    digitalWrite(PIN_SR_DI, bitRead(digit, i));
-    digitalWrite(PIN_SR_CK, HIGH);
-    digitalWrite(PIN_SR_CK, LOW);
-  }
-  digitalWrite(PIN_SR_ST, HIGH);
-  digitalWrite(PIN_SR_ST, LOW);
-  digitalWrite(PIN_DIGIT_ENA, showScreen);
-  delay(2);
-  digitNum++;
-  digitNum %= DIGIT_MAX;
-}
-
-
-
 /*
  * Méthodes pour contrôler la mécanique qui simule les pas
  */
@@ -337,7 +193,7 @@ bool walk()
     if ((millis() - stepAt) > SPEED_WALK)
     {
       footUp = !footUp;
-      writeDot(DOT_STEP, footUp);
+      disp.writeDot(DOT_STEP, footUp);
       if (footUp)
       {
         myservo.write(POS_HIGH);
@@ -351,7 +207,7 @@ bool walk()
           walking = false;
           myservo.detach();
         }
-        updateDisplayMemory();
+        disp.write(stepsRemaining);
       }
       stepAt = millis();
     }
@@ -386,62 +242,28 @@ void setup() {
   pinMode(PIN_ENCB, INPUT);
   pinMode(PIN_ENCS, INPUT_PULLUP);
   
-  pinMode(PIN_SR_CK, OUTPUT);
-  pinMode(PIN_SR_DI, OUTPUT);
-  pinMode(PIN_SR_ST, OUTPUT);
-  digitalWrite(PIN_SR_CK, LOW);
-  digitalWrite(PIN_SR_ST, LOW);
-  digitalWrite(PIN_SR_DI, LOW);
-#ifdef USE_CD4017
-  pinMode(PIN_CD4017_MR, OUTPUT);
-  digitalWrite(PIN_CD4017_MR, HIGH);
-#else
-  pinMode(PIN_DIGIT_ADDR0, OUTPUT);
-  pinMode(PIN_DIGIT_ADDR1, OUTPUT);
-  pinMode(PIN_DIGIT_ADDR2, OUTPUT);
-#endif
-  pinMode(PIN_DIGIT_ENA, OUTPUT);
-
   // Lamp test
-  blankScreen = false;
-  digitNum    = 0;
-  cursorPos   = CURSOR_MAX | 0x80; // Curseur à la position max et invisible
+  disp.lampTest();
 
-  // Affiche 43210 mais 1 chiffre à la fois
-  for (int i = 0; i < DIGIT_MAX; i++)
-  {
-    digits[i] = segments[i];
-  }
-  for (int i = 0; i < DIGIT_MAX; i++)
-  {
-    displayNextDigit();
-    delay(200);
-  }
-
-  // Affiche tous les segments, points inclus et vérifie si le bouton est resté toujours enfoncé
-  for (int i = 0; i < DIGIT_MAX; i++)
-  {
-    digits[i] = 0xff;
-  }
   while (millis() < 2000)
   {
     if (digitalRead(PIN_ENCS))
     {
       factoryDefault = false;
     }
-    displayNextDigit();
+    disp.displayNextDigit();
   }
 
   // Si le bouton est resté enfoncé tout le temps, on restaue la configuration d'usine
   if (factoryDefault)
   {
     // Affiche [===]
+    disp.write(0, 0xf0);
+    disp.write(DIGIT_MAX-1, 0x9c);
     for (int i = 1; i < DIGIT_MAX-1; i++)
     {
-      digits[i] = 0x90; // segment haut et bas allumés
+      disp.write(i, 0x90); // segment haut et bas allumés
     }
-    digits[0] = 0xf0;
-    digits[DIGIT_MAX-1] = 0x9c;
 
     // Attends que le bouton soit relâché
     do {
@@ -449,16 +271,14 @@ void setup() {
       {
         digitAt = millis();
       }
-      displayNextDigit();
+      disp.displayNextDigit();
     } while ((millis() - digitAt) < 100);
   }
 
   // Efface l'écran complètement, points inclus
-  for (int i = 0; i < DIGIT_MAX; i++)
-  {
-    digits[i] = 0x00;
-  }
-  updateDisplayMemory();
+  disp.clear();
+  disp.hideLeadingZeros();
+  disp.write(stepsRemaining);
 
   // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
   #ifdef USE_INT_SW
@@ -497,7 +317,7 @@ void loop() {
     si l'encodeur est tourné dans le sens inverse: décrémenter la vitesse
   */
 
-  displayNextDigit();
+  disp.displayNextDigit();
   digitalWrite(LED_BUILTIN, doit);
 #ifndef USE_INT_SW
   checkButton();
@@ -520,10 +340,9 @@ void loop() {
   {
     if (walk())
     {
-      leadingZeros = true;
-      updateDisplayMemory();
-      blankScreen = ((millis() % 500) < 250);
-      if (blankScreen)
+      disp.showLeadingZeros();
+      disp.blankScreen = ((millis() % 500) < 250);
+      if (disp.blankScreen)
       {
         digitalWrite(PIN_BUZZER, HIGH);
       }
@@ -543,11 +362,12 @@ void loop() {
 #endif
       doit = false;
       digitalWrite(PIN_BUZZER, LOW);
-      blankScreen = false;
-      leadingZeros = false;
+      disp.blankScreen = false;
+      disp.hideLeadingZeros();
       stepsRemaining = STEPS_INIT;
-      updateDisplayMemory();
-      cursorPos = CURSOR_MAX | 0x80; // Cache le curseur
+      disp.hideCursor();
+      disp.setCursor(3);
+      disp.write(stepsRemaining);
 #ifdef USE_INT_SW
       btnShortPressed = false;
       btnLongPressed = false;
@@ -599,39 +419,31 @@ void loop() {
         if (stepsRemaining > 0)
         {
           doit = true;
-          cursorPos = CURSOR_MAX;
+          disp.setCursor(CURSOR_MAX);
         }
-        cursorPos |= 0x80;  // Cache le curseur
+        disp.hideCursor();
       }
       else
       {
         digitAt = millis();
-        if (cursorPos & 0x80)
-        {
-          cursorPos &= 0x7f;  // Affiche le curseur
-        }
-        else
-        {
-          if (cursorPos > 0)
-          { 
-            cursorPos--;
-          }
-          else
-          {
-            cursorPos = CURSOR_MAX;
-          }
-        }
+        disp.moveCursor(false);
       }
       buttonReleased = false;
-      writeDot(DOT_LONGPRESS, false);
+      disp.writeDot(DOT_LONGPRESS, false);
     }
 #endif
-    else if ((rot != 0) && !(cursorPos & 0x80))
+    else if ((rot != 0) && disp.isCursorVisible())
     { // Si encodeur tourné et curseur affiché
       digitAt = millis();
       int r = rot;
       unsigned int stepdiff = (unsigned int)abs(r);
-      unsigned int rank = powerTen(cursorPos);
+      unsigned int rank = 1;
+      unsigned char p = disp.getCursor();
+      while (p > 0)
+      {
+        rank *= 10;
+        p--;
+      }
       if (stepdiff > (STEPS_MAX / rank))
       {
         stepdiff = STEPS_MAX;
@@ -650,7 +462,7 @@ void loop() {
         {
           stepsRemaining -= stepdiff;
         }
-        updateDisplayMemory();
+        disp.write(stepsRemaining);
       }
       else 
       { // r > 0
@@ -662,16 +474,16 @@ void loop() {
         {
           stepsRemaining += stepdiff;
         }
-        updateDisplayMemory();
+        disp.write(stepsRemaining);
       }
     }
     else if (buttonPressed && ((millis() - buttonChangedAt) > LONG_PRESS))
     {
-      writeDot(DOT_LONGPRESS, true);
+      disp.writeDot(DOT_LONGPRESS, true);
     }
-    if (!(cursorPos & 0x80) && ((millis() - digitAt) > DIGIT_TIMEOUT))
+    if (disp.isCursorVisible() && ((millis() - digitAt) > DIGIT_TIMEOUT))
     { // Si curseur affiché et pas de rotation pendant longtemps
-      cursorPos |= 0x80;  // Masque le curseur
+      disp.hideCursor();  // Masque le curseur
     }
   }
 
