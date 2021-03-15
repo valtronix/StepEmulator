@@ -2,9 +2,13 @@
 #include "Button.h"
 
 Button::Button(unsigned char pin)
+ : Button(pin, true) {}
+
+Button::Button(unsigned char pin, bool inverted)
 {
     pin_btn = pin;
-    pinMode(pin_btn, INPUT_PULLUP);
+    this->inverted = inverted;
+    pinMode(pin_btn, inverted?INPUT_PULLUP:INPUT);
     isHandled = false;
     pressedAt = 0;
     releasedAt = 0;
@@ -21,7 +25,11 @@ Button::~Button()
 
 void Button::check()
 {
-    bool btn = !digitalRead(pin_btn);
+    bool btn = digitalRead(pin_btn);
+    if (inverted)
+    {
+        btn = !btn;
+    }
     unsigned long now = millis();
     if ((btn != oldStatus) && ((now - changedAt) > DEBOUNCE_TIME))
     {

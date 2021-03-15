@@ -10,8 +10,10 @@ private:
     unsigned long changedAt, pressedAt, releasedAt;
     bool buttonPressed, buttonReleased;
     bool oldStatus, isHandled;
+    bool inverted;
 public:
     Button(unsigned char pin);
+    Button(unsigned char pin, bool inverted);
     ~Button();
     void check();
     bool isPressed();
