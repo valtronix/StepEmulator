@@ -3,6 +3,8 @@
 
 #include <Display.h>
 #include <Button.h>
+#include <Encoder.h>
+
 
 /*
  * Utilisation:
@@ -28,6 +30,7 @@
 Servo myservo;               // Crée un objet servo pour contrôler un servomoteur
 Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
 Button encbtn(PIN_ENCS);
+Encoder encoder(PIN_ENCA, PIN_ENCB);
 
 unsigned int stepsRemaining; // Nombre de pas restant
 unsigned long digitAt;
@@ -36,15 +39,15 @@ bool walking;
 bool footUp;
 unsigned long stepAt;
 
-volatile unsigned long rotatedAt;
-volatile int rot;
+// volatile unsigned long rotatedAt;
+// volatile int rot;
 
 #define POS_LOW                90
 #define POS_HIGH              180
 
 #define LONG_PRESS           1000
 
-#define DEBOUNCE_TIME           5
+// #define DEBOUNCE_TIME           5
 #define DIGIT_TIMEOUT       10000
 
 #define SPEED_WALK            600
@@ -63,13 +66,13 @@ volatile int rot;
  * Méthodes appelées dans des interruptions. *********************************
  */
 // Interruption déclenchée à chaque fois que l'encodeur est tourné
-void onEncoderTurned() {
-  if ((millis() - rotatedAt) > DEBOUNCE_TIME)
-  { // Debounce
-    rot += digitalRead(PIN_ENCB)?-1:1;
-    rotatedAt = millis();
-  }
-}
+// void onEncoderTurned() {
+//   if ((millis() - rotatedAt) > DEBOUNCE_TIME)
+//   { // Debounce
+//     rot += digitalRead(PIN_ENCB)?-1:1;
+//     rotatedAt = millis();
+//   }
+// }
 
 
 /*
@@ -128,15 +131,15 @@ void setup() {
 
   stepsRemaining = STEPS_INIT;
   doit = false;
-  rot = 0;
+  // rot = 0;
+  // rotatedAt = 0;
   digitAt = 0;
-  rotatedAt = 0;
   walking = false;
 
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);
-  pinMode(PIN_ENCA, INPUT);
-  pinMode(PIN_ENCB, INPUT);
+  // pinMode(PIN_ENCA, INPUT);
+  // pinMode(PIN_ENCB, INPUT);
   
   // Lamp test
   disp.lampTest();
@@ -175,11 +178,12 @@ void setup() {
   disp.write(stepsRemaining);
 
   // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
+  // attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
 
   // timer1 (TCCR1) utilisé par le servo moteur
   digitalWrite(LED_BUILTIN, LOW);
   encbtn.handled();
+  encoder.clear();
 }
 
 /*****************************************************************************
@@ -273,10 +277,10 @@ void loop() {
       }
       disp.writeDot(DOT_LONGPRESS, false);
     }
-    else if ((rot != 0) && disp.isCursorVisible())
+    else if ((encoder.read() != 0) && disp.isCursorVisible())
     { // Si encodeur tourné et curseur affiché
       digitAt = millis();
-      int r = rot;
+      int r = encoder.read();
       unsigned int stepdiff = (unsigned int)abs(r);
       unsigned int rank = 1;
       unsigned char p = disp.getCursor();
@@ -328,7 +332,7 @@ void loop() {
     }
   }
 
-  rot = 0;
+  encoder.clear();
 
 #ifdef DEBUG_SER
   Serial.println();
