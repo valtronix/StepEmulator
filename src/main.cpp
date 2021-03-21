@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Servo.h>
+#include <EEPROM.h>
 
 #include <Display.h>
 #include <Button.h>
@@ -43,7 +44,6 @@ volatile int rot;
 #define POS_HIGH              180
 
 #define LONG_PRESS           1000
-
 #define DEBOUNCE_TIME           5
 #define DIGIT_TIMEOUT       10000
 
@@ -58,6 +58,16 @@ volatile int rot;
 #define DOT_RESERVED            3
 #define DOT_LONGPRESS           4
 
+struct MyConfig_t {
+  unsigned char pos_stepdown, pos_stepup;
+  unsigned int steps_init;
+  unsigned int walk_speed;
+  unsigned int run_speed;
+  unsigned char walk_ratio;
+  unsigned char run_ratio;
+};
+
+MyConfig_t config;
 
 /*
  * Méthodes appelées dans des interruptions. *********************************
@@ -90,17 +100,17 @@ bool walk()
       footUp = true;
       stepAt = millis();
     }
-    if ((millis() - stepAt) > SPEED_WALK)
+    if ((millis() - stepAt) > config.walk_speed)
     {
       footUp = !footUp;
       disp.writeDot(DOT_STEP, footUp);
       if (footUp)
       {
-        myservo.write(POS_HIGH);
+        myservo.write(config.pos_stepup);
       }
       else
       {
-        myservo.write(POS_LOW);
+        myservo.write(config.pos_stepdown);
         stepsRemaining--;
         if (stepsRemaining == 0)
         {
@@ -116,17 +126,18 @@ bool walk()
 }
 
 
+
 /*****************************************************************************
  * Initialisation ------------------------------------------------------------
  *****************************************************************************/
 void setup() {
+  const static unsigned char configSize = sizeof(MyConfig_t) - 1;
 #ifdef DEBUG_SER
   Serial.begin(9600);
 #endif
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
 
-  stepsRemaining = STEPS_INIT;
   doit = false;
   rot = 0;
   digitAt = 0;
@@ -134,52 +145,142 @@ void setup() {
   walking = false;
 
   pinMode(PIN_BUZZER, OUTPUT);
-  digitalWrite(PIN_BUZZER, LOW);
+  digitalWrite(PIN_BUZZER, HIGH);
   pinMode(PIN_ENCA, INPUT);
   pinMode(PIN_ENCB, INPUT);
   
   // Lamp test
   disp.lampTest();
 
-  bool factoryDefault = encbtn.isPressed();
-  while (millis() < 2000)
+  // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
+
+  bool changeConfig = false;
+  while ((millis() < 1000) || encbtn.isPressed())
   {
-    if (encbtn.isReleased())
-    {
-      factoryDefault = false;
-    }
+    digitalWrite(PIN_BUZZER, millis() <= 250);
     disp.displayNextDigit();
+    encbtn.check();
+    if (encbtn.isPressed() && (encbtn.getPressedDuration() > LONG_PRESS))
+    {
+      if (!changeConfig)
+      {
+        // Affiche [===]
+        disp.write(0, 0xf0);
+        disp.write(DIGIT_MAX-1, 0x9c);
+        for (int i = 1; i < DIGIT_MAX-1; i++)
+        {
+          disp.write(i, 0x90); // segment haut et bas allumés
+        }
+        encbtn.handled();
+        changeConfig = true;
+      }
+    }
   }
 
-  // Si le bouton est resté enfoncé tout le temps, on restaue la configuration d'usine
-  if (factoryDefault)
+  // Si le bouton est resté enfoncé assez longtemps, on passe en mode configuration
+  if (changeConfig)
   {
-    // Affiche [===]
-    disp.write(0, 0xf0);
-    disp.write(DIGIT_MAX-1, 0x9c);
-    for (int i = 1; i < DIGIT_MAX-1; i++)
-    {
-      disp.write(i, 0x90); // segment haut et bas allumés
-    }
-
-    // Attends que le bouton soit relâché
-    while (!encbtn.isReleased())
+    unsigned char address = 0;
+    bool addressSelected = true;
+    unsigned char value = EEPROM.read(address);
+    disp.write(address, value, true);
+    myservo.write(value);
+    disp.setCursor(3);
+    disp.showCursor();
+    myservo.attach(PIN_SERVO);
+    while (changeConfig)
     {
       disp.displayNextDigit();
+      encbtn.check();
+      if (encbtn.isReleased())
+      {
+        if (encbtn.getPressedDuration() > LONG_PRESS)
+        {
+          EEPROM.update(address, value);
+          changeConfig = false;
+        }
+        else
+        {
+          addressSelected = !addressSelected;
+          disp.setCursor(addressSelected?3:0);
+        }
+      }
+      if (rot != 0)
+      {
+        if (addressSelected)
+        {
+          EEPROM.update(address, value);
+          if ((rot < 0) && (address < -rot))
+          {
+            address = 0;
+            digitalWrite(PIN_BUZZER, HIGH);
+            delay(1);
+            digitalWrite(PIN_BUZZER, LOW);
+          }
+          else if ((rot > 0) && ((int)(configSize - address) < rot))
+          {
+            address = configSize;
+            digitalWrite(PIN_BUZZER, HIGH);
+            delay(1);
+            digitalWrite(PIN_BUZZER, LOW);
+          }
+          else
+          {
+            address += rot;
+          }
+          value = EEPROM.read(address);
+        }
+        else
+        {
+          if ((rot < 0) && (value < -rot))
+          {
+            value = 0;
+            digitalWrite(PIN_BUZZER, HIGH);
+            delay(1);
+            digitalWrite(PIN_BUZZER, LOW);
+          }
+          else if ((rot > 0) && ((255 - value) < rot))
+          {
+            value = 255;
+            digitalWrite(PIN_BUZZER, HIGH);
+            delay(1);
+            digitalWrite(PIN_BUZZER, LOW);
+          }
+          else
+          {
+            value += rot;
+          }
+        }
+        disp.write(address, value, true);
+        switch (address)
+        {
+          case 0:
+          case 1:
+            myservo.write(value);
+            break;
+          default:
+            break;
+        }
+        rot = 0;
+      }
     }
+    myservo.detach();
   }
+
+  EEPROM.get(0, config);
+  stepsRemaining = config.steps_init;
 
   // Efface l'écran complètement, points inclus
   disp.clear();
+  disp.hideCursor();
   disp.hideLeadingZeros();
   disp.write(stepsRemaining);
-
-  // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
 
   // timer1 (TCCR1) utilisé par le servo moteur
   digitalWrite(LED_BUILTIN, LOW);
   encbtn.handled();
+  rot = 0;
 }
 
 /*****************************************************************************
@@ -243,7 +344,7 @@ void loop() {
       if (stepsRemaining == 0)
       {
         digitalWrite(PIN_BUZZER, LOW);
-        stepsRemaining = STEPS_INIT;
+        stepsRemaining = config.steps_init;
         disp.blankScreen = false;
         disp.hideLeadingZeros();
         disp.hideCursor();
