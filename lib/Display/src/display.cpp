@@ -157,20 +157,19 @@ void Display::write(unsigned int value) {
 void Display::write(unsigned char address, unsigned char value, bool hex) {
   numberDisplayed = false;
   unsigned char p = DIGIT_MAX;
-  digits[--p] = segments[(address / 10) % 10];
-  digits[--p] = segments[address % 10] | 0x01;
   if (hex)
   {
-    digits[--p] = 0;
-    digits[--p] = segments[value >> 4];
-    digits[--p] = segments[value & 0x0f];
+    digits[--p] = segments[address >> 4];
+    digits[--p] = segments[address & 0x0f];
   }
   else
   {
-    digits[--p] = segments[(value / 100) % 10];
-    digits[--p] = segments[(value / 10) % 10];
-    digits[--p] = segments[value % 10];
+    digits[--p] = segments[(address / 10) % 10];
+    digits[--p] = segments[address % 10] | 0x01;
   }
+  digits[--p] = segments[(value / 100) % 10];
+  digits[--p] = segments[(value / 10) % 10];
+  digits[--p] = segments[value % 10];
 }
 
 void Display::write(unsigned char pos, unsigned char digit) {
