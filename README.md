@@ -27,18 +27,18 @@ The cursor will blink on the first group of 2 digits. The cursor will switch bet
 
 It you turn the button, it will increase or decrease the group of digits on which is the cursor. Changing the address will store the value and display the value corresponding to the new address.
 
-Address | Meaning
--------:|--------
- 00     | Position of the servo for step down
- 01     | Position of the servo for step up
- 02     | Number of steps by default (low byte)
- 03     | Number of steps by default (high byte)
- 04     | Speed for walking (low byte)
- 05     | Speed for walking (high byte)
- 06     | Speed for running (low byte)
- 07     | Speed for running (high byte)
- 08     | Step ratio for walking
- 09     | Step ratio for running
+Address | Meaning                                | Default value
+-------:|----------------------------------------|---------------:
+ 00     | Position of the servo for step down    |    20
+ 01     | Position of the servo for step up      |   180
+ 02     | Number of steps by default (low byte)  |     3
+ 03     | Number of steps by default (high byte) |
+ 04     | Speed for walking (low byte)           | 
+ 05     | Speed for walking (high byte)          | 
+ 06     | Speed for running (low byte)           | 
+ 07     | Speed for running (high byte)          | 
+ 08     | Step ratio for walking                 |   50
+ 09     | Step ratio for running                 |   50
  
  **Warning:** Changing this settings can cause major failure.
  
