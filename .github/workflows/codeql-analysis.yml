@@ -97,7 +97,7 @@ jobs:
 
     - name: Build example
       run:
-        arduino-cli compile --libraries /home/runner/work/StepEmulator --fqbn arduino:avr:uno $PWD/src/main.cpp --warnings=all
+        arduino-cli compile --libraries /home/runner/work/StepEmulator --fqbn arduino:avr:uno $PWD/lib/Button/examples/Buttons/Buttons.ino --warnings=all
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v1
