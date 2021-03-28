@@ -29,6 +29,12 @@ Display::Display(unsigned char pin_clock, unsigned char pin_data, unsigned char 
 
 Display::~Display()
 {
+  clear();
+  pinMode(pin_ck, INPUT);
+  pinMode(pin_di, INPUT);
+  pinMode(pin_st, INPUT);
+  pinMode(pin_mr, INPUT);
+  pinMode(pin_en, INPUT);
 }
 
 // Retourne 10 à la puissance value
@@ -73,7 +79,7 @@ void Display::displayNextDigit() {
   digitalWrite(pin_mr, isDigit0);
   if (cursorBlinkOn && (cursorPos == digitNum))
   { // Cursor visible
-    digit = 0x10;
+    digit = (digits[digitNum] & 0x01) | 0x10;
   }
   else
   {

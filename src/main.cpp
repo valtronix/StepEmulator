@@ -22,15 +22,16 @@ Servo myservo;
 Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
 Button encbtn(PIN_ENCS);
 
-unsigned int stepsRemaining;        // Number of remaining steps
-unsigned int speed;                 // Actual speed
-unsigned long digitAt;              // Last time digits was changed
+unsigned int stepsRemaining;          // Number of remaining steps
+unsigned int speed;                   // Actual speed
+unsigned long lastUserInteractionAt;  // Last time digits was changed
+unsigned long longPressDelay;         // Long press delay (previously LONG_PRESS)
+unsigned long powerOffDelay;          // Delay before to switch off
+unsigned long setTimeout;             // Delay before leaving set mode (timeout)
 
 volatile char rot;
 
 #define DEBOUNCE_TIME           5
-#define LONG_PRESS           1000
-#define DIGIT_TIMEOUT       10000
 
 #define DOT_STEP                0
 #define DOT_SPEED               1
@@ -39,33 +40,41 @@ volatile char rot;
 #define DOT_LONGPRESS           4
 
 struct MyConfig_t {
-  unsigned char pos_stepdown;       // Servo motor position when foot is down
-  unsigned char pos_stepup;         // Servo motor position when foot is up
-  unsigned int steps_init;          // Number of steps by default (at startup)
-  unsigned int speed_init;          // Default speed (at startup)
-  unsigned int steps_max;           // Number of steps at maximum
-  unsigned int speed_min;           // Lowest speed
-  unsigned int speed_max;           // Highest speed
-  unsigned char walk_ratio;         // Lowest ratio (step up/down)
-  unsigned char run_ratio;          // Highest ratio (step up/down)
+  unsigned char pos_stepdown;         // Servo motor position when foot is down
+  unsigned char pos_stepup;           // Servo motor position when foot is up
+  unsigned int steps_init;            // Number of steps by default (at startup)
+  unsigned int speed_init;            // Default speed (at startup)
+  unsigned int steps_max;             // Number of steps at maximum
+  unsigned int speed_min;             // Lowest speed
+  unsigned int speed_max;             // Highest speed
+  unsigned char walk_ratio;           // Lowest ratio (step up/down)
+  unsigned char run_ratio;            // Highest ratio (step up/down)
+  unsigned char delay_longpress;      // Delay for a long press (previously LONG_PRESS) but in 10th of seconds
+  unsigned char delay_set;            // Delay to exit set mode (previously DIGIT_TIMEOUT) but in 10th of seconds
+  unsigned char delay_off;            // Delay before displaying OFF message (in seconds)
+  unsigned char delay_offmsg;         // Delay before auto power off after OFF message (in 10th of seconds)
 };
 
 MyConfig_t config;
 const MyConfig_t defaultConfig = {
-  90,
-  180,
-  1000,
-  400,
-  20000,
-  150,
-  800,
-  50,
-  50
+  22,         // 0x00: 0x16
+  130,        // 0x01: 0x82
+  1000,       // 0x02: 0xe8 0x03 [232 3]
+  400,        // 0x04: 0x90 0x01 [144 1]
+  20000,      // 0x06: 0x20 0x4e [32 78]
+  150,        // 0x08: 0x96 0x00 [150 0]
+  800,        // 0x0a: 0x20 0x03 [32 3]
+  50,         // 0x0c: 0x32
+  50,         // 0x0d: 0x32
+  10,         // 0x0e: 0x0a (1 second)
+  15,         // 0x0f: 0x0f (1.5 second)
+  60,         // 0x10: 0x3c (60 seconds)
+  50          // 0x11: 0x32 (5 seconds)
 };
 
 
 enum States : char {
-  Poweroff = -1,
+  PowerOff = -1,
   Init = 0,
   SetSteps,
   AdjustSteps,
@@ -80,7 +89,7 @@ States state;
 void buzzer_clic() {
   bool clic = digitalRead(PIN_BUZZER);
   digitalWrite(PIN_BUZZER, !clic);
-  delay(1);
+  delay(2);
   digitalWrite(PIN_BUZZER, clic);
 }
 
@@ -183,7 +192,9 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH);
 
   rot = 0;
-  digitAt = 0;
+  lastUserInteractionAt = 0;
+  longPressDelay = 1000;  // 1 second
+  powerOffDelay = 60000;  // 60 secondes
 
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, HIGH);
@@ -193,7 +204,7 @@ void setup() {
   // Lamp test
   disp.lampTest();
 
-  // Sur la carte Uno, les 2 seules PIN gérant les interruptions sont PIN2 et PIN3
+  // On Uno card, only pins 2 and 3 are hardware interrupts
   attachInterrupt(digitalPinToInterrupt(PIN_ENCA), onEncoderTurned, FALLING);
 
   bool changeConfig = false;
@@ -202,16 +213,16 @@ void setup() {
     digitalWrite(PIN_BUZZER, millis() <= 250);
     disp.displayNextDigit();
     encbtn.check();
-    if (encbtn.isPressed() && (encbtn.getPressedDuration() > LONG_PRESS))
+    if (encbtn.isPressed() && (encbtn.getPressedDuration() > longPressDelay))
     {
       if (!changeConfig)
       {
-        // Affiche [===]
+        // Display [===]
         disp.write(0, 0xf0);
         disp.write(DIGIT_MAX-1, 0x9c);
         for (int i = 1; i < DIGIT_MAX-1; i++)
         {
-          disp.write(i, 0x90); // segment haut et bas allumés
+          disp.write(i, 0x90);
         }
         encbtn.handled();
         changeConfig = true;
@@ -219,7 +230,7 @@ void setup() {
     }
   }
 
-  // Si le bouton est resté enfoncé assez longtemps, on passe en mode configuration
+  // If button stay pressed lng enough, switch to configuration mode
   if (changeConfig)
   {
     unsigned char address = 0;
@@ -236,7 +247,7 @@ void setup() {
       encbtn.check();
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           EEPROM.update(address, value);
           changeConfig = false;
@@ -304,15 +315,24 @@ void setup() {
   EEPROM.get(0, config);
   stepsRemaining = config.steps_init;
   speed = config.speed_init;
+  longPressDelay = int(config.delay_longpress) * 100U;
+  powerOffDelay = int(config.delay_off) * 1000U;
+  setTimeout = (unsigned long)config.delay_set * 100UL;
+#ifdef DEBUG_SER
+  Serial.println("Steps: " + String(stepsRemaining));
+  Serial.println("Speed: " + String(speed) + " steps/min");
+  Serial.println("Long press: " + String(double(longPressDelay) / 1000.0) + " s");
+  Serial.println("Auto power off: " + String(powerOffDelay));
+  Serial.println("Set timeout: " + String(setTimeout));
+#endif
 
-  // Efface l'écran complètement, points inclus
+  // Clear all screen (including dots)
   disp.clear();
   disp.hideCursor();
   disp.hideLeadingZeros();
   disp.write(stepsRemaining);
 
-  // timer1 (TCCR1) utilisé par le servo moteur
-  digitalWrite(LED_BUILTIN, LOW);
+  // timer1 (TCCR1) used by servo
   encbtn.handled();
   rot = 0;
   state = States::Init;
@@ -327,14 +347,26 @@ void SetState(States newstate) {
     case AdjustSteps:
     // case ChangeSpeed:
       disp.showCursor();
-      digitAt = millis();
       break;
     case Emulate:
       // disp.setCursor(2);
       break;
+    case PowerOff:
+      digitalWrite(PIN_BUZZER, LOW);
+      disp.blankScreen = false;
+      disp.clear();
+      disp.hideCursor();
+      disp.write(2, 0xfc); // O
+      disp.write(1, 0x8e); // F
+      disp.write(0, 0x8e); // F
+#ifdef DEBUG_SER
+      Serial.println("**Power Off");
+#endif
+      break;
     default:
       break;
   }
+  lastUserInteractionAt = millis();
   state = newstate;
 }
 
@@ -345,24 +377,14 @@ void loop() {
   disp.displayNextDigit();
   encbtn.check();
 
-#ifdef DEBUG_SER
-  Serial.print(doit);
-  Serial.print(" - ");
-  Serial.print(btnLongPressed);
-  Serial.print(btnShortPressed);
-  Serial.print(" - ");
-  Serial.print((int)digitNum);
-  Serial.print("/");
-  Serial.print(rot);
-  Serial.print(" - ");
-  Serial.print(stepsRemaining);
-  Serial.print(" ");
-#endif
-
   switch (state) {
     case States::Init:
+#ifdef DEBUG_SER
+      Serial.println("**Init");
+#endif
       digitalWrite(PIN_BUZZER, LOW);
       stepsRemaining = config.steps_init;
+      speed = config.speed_init;
       disp.clear();
       disp.blankScreen = false;
       disp.hideLeadingZeros();
@@ -375,7 +397,7 @@ void loop() {
     case States::SetSteps:
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           SetState(States::Emulate);
         }
@@ -384,17 +406,15 @@ void loop() {
           SetState(States::AdjustSteps);
         }
       }
-      /*
-      else if ()
+      else if ((millis() - lastUserInteractionAt) > powerOffDelay)
       {
         SetState(States::PowerOff);
       }
-      */
       break;
     case States::AdjustSteps:
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           config.steps_init = stepsRemaining;
           // TODO: save to EEPROM
@@ -404,7 +424,7 @@ void loop() {
         {
           disp.moveCursor(false);
         }
-        digitAt = millis();
+        lastUserInteractionAt = millis();
       }
       else if (rot)
       {
@@ -448,9 +468,9 @@ void loop() {
           }
         }
         disp.write(stepsRemaining);
-        digitAt = millis();
+        lastUserInteractionAt = millis();
       }
-      else if ((millis() - digitAt) > DIGIT_TIMEOUT)
+      else if ((millis() - lastUserInteractionAt) > setTimeout)
       { // If no user interaction
         disp.hideCursor();
         SetState(States::SetSteps);
@@ -459,7 +479,7 @@ void loop() {
     case States::Emulate:
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           SetState(States::Init);
         }
@@ -476,7 +496,7 @@ void loop() {
         // disp.setCursor(0);
         // disp.showCursor();
         SetState(States::ChangeSpeed);
-        digitAt = millis();
+        lastUserInteractionAt = millis();
       }
       else
       {
@@ -490,7 +510,7 @@ void loop() {
     case States::ChangeSpeed:
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           SetState(States::Init);
         }
@@ -516,28 +536,30 @@ void loop() {
         }
         else if (rot)
         {
+          unsigned int r = (unsigned int)abs(rot);
           if (rot > 0)
           {
-            if ((speed + rot) > config.speed_max)
+            if ((speed + r) > config.speed_max)
             {
-              rot = config.speed_max - speed;
+              r = config.speed_max - speed;
               buzzer_clic();
             }
+            speed += r;
           }
           else
           {
-            if ((speed + rot) < config.speed_min)
+            if ((speed - r) < config.speed_min)
             {
-              rot = speed - config.speed_min;
+              r = speed - config.speed_min;
               buzzer_clic();
             }
+            speed -= r;
           }
-          speed += rot;
           disp.write(speed);
-          digitAt = millis();
+          lastUserInteractionAt = millis();
         }
-        else if ((millis() - digitAt) > DIGIT_TIMEOUT)
-        {
+        else if ((millis() - lastUserInteractionAt) > setTimeout)
+        { // If no user interaction
           disp.hideCursor();
           disp.write(stepsRemaining);
           disp.writeDot(DOT_SPEED, false);
@@ -549,7 +571,7 @@ void loop() {
     case States::Paused:
       if (encbtn.isReleased())
       {
-        if (encbtn.getPressedDuration() > LONG_PRESS)
+        if (encbtn.getPressedDuration() > longPressDelay)
         {
           SetState(States::Init);
         }
@@ -569,12 +591,10 @@ void loop() {
       {
         SetState(States::Init);
       }
-      /*
-      else if ()
+      else if ((millis() - lastUserInteractionAt) > powerOffDelay)
       {
-        SetState(States::Poweroff);
+        SetState(States::PowerOff);
       }
-      */
       else
       {
         disp.blankScreen = ((millis() % 500) < 250);
@@ -588,18 +608,20 @@ void loop() {
         }
       }
       break;
-    case States::Poweroff:
-      disp.clear();
-      disp.write(2, 0);
-      disp.write(1, 15);
-      disp.write(2, 15);
+    case States::PowerOff:
+      if (encbtn.isPressed())
+      {
+        encbtn.handled();
+        digitalWrite(LED_BUILTIN, HIGH);
+        SetState(States::Init);
+      }
+      else if ((millis() - lastUserInteractionAt) > (unsigned long)(config.delay_offmsg * 100))
+      {
+        disp.clear();
+        digitalWrite(LED_BUILTIN, LOW);
+      }
       break;
   }
 
   rot = 0;
-
-#ifdef DEBUG_SER
-  Serial.println();
-  delay(100);
-#endif
 }
