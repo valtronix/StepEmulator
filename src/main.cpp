@@ -23,7 +23,7 @@ Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
 Button encbtn(PIN_ENCS);
 
 unsigned int stepsRemaining;          // Number of remaining steps
-unsigned int speed;                   // Actual speed
+unsigned char speed;                  // Actual speed (steps by second)
 unsigned long lastUserInteractionAt;  // Last time digits was changed
 unsigned long longPressDelay;         // Long press delay (previously LONG_PRESS)
 unsigned long powerOffDelay;          // Delay before to switch off
@@ -42,13 +42,13 @@ volatile char rot;
 struct MyConfig_t {
   unsigned char pos_stepdown;         // Servo motor position when foot is down
   unsigned char pos_stepup;           // Servo motor position when foot is up
-  unsigned int steps_init;            // Number of steps by default (at startup)
-  unsigned int speed_init;            // Default speed (at startup)
-  unsigned int steps_max;             // Number of steps at maximum
-  unsigned int speed_min;             // Lowest speed
-  unsigned int speed_max;             // Highest speed
-  unsigned char walk_ratio;           // Lowest ratio (step up/down)
-  unsigned char run_ratio;            // Highest ratio (step up/down)
+  unsigned int  steps_init;           // Number of steps by default (at startup)
+  unsigned int  steps_min;            // Number of steps at minimum
+  unsigned int  steps_max;            // Number of steps at maximum
+  unsigned char speed_init;           // Default speed (at startup) (steps by minute)
+  unsigned char speed_min;            // Lowest speed (steps by minute)
+  unsigned char speed_max;            // Highest speed (steps by minute)
+  unsigned char step_ratio;           // Step ratio (step up/down)
   unsigned char delay_longpress;      // Delay for a long press (previously LONG_PRESS) but in 10th of seconds
   unsigned char delay_set;            // Delay to exit set mode (previously DIGIT_TIMEOUT) but in 10th of seconds
   unsigned char delay_off;            // Delay before displaying OFF message (in seconds)
@@ -60,16 +60,16 @@ const MyConfig_t defaultConfig = {
   22,         // 0x00: 0x16
   130,        // 0x01: 0x82
   1000,       // 0x02: 0xe8 0x03 [232 3]
-  400,        // 0x04: 0x90 0x01 [144 1]
+  10,         // 0x04: 0x0a 0x00 [10 0]
   20000,      // 0x06: 0x20 0x4e [32 78]
-  150,        // 0x08: 0x96 0x00 [150 0]
-  800,        // 0x0a: 0x20 0x03 [32 3]
-  50,         // 0x0c: 0x32
-  50,         // 0x0d: 0x32
-  10,         // 0x0e: 0x0a (1 second)
-  15,         // 0x0f: 0x0f (1.5 second)
-  60,         // 0x10: 0x3c (60 seconds)
-  50          // 0x11: 0x32 (5 seconds)
+  100,        // 0x08: 0x64
+  16,         // 0x09: 0x10
+  255,        // 0x0a: 0xff
+  50,         // 0x0b: 0x32
+  10,         // 0x0c: 0x0a (1 second)
+  15,         // 0x0d: 0x0f (1.5 second)
+  60,         // 0x0e: 0x3c (60 seconds)
+  50          // 0x0f: 0x32 (5 seconds)
 };
 
 
@@ -130,11 +130,12 @@ void onEncoderTurned() {
 
 
 /*
- * Méthodes pour contrôler la mécanique qui simule les pas
+ * Emulate steps
  */
 bool walk()
 {
   static unsigned long stepAt = 0;
+  static unsigned long nextStepAt = 0;
   static bool footUp = false;
   static bool walking = false;
   if (stepsRemaining == 0)
@@ -143,15 +144,18 @@ bool walk()
   }
   else
   {
+    unsigned long now = millis();
     if (!walking)
     { // Start walking
       walking = true;
       myservo.attach(PIN_SERVO);
       footUp = false;
-      stepAt = millis();
+      stepAt = now;
+      nextStepAt = 0;
     }
-    if ((millis() - stepAt) > speed)
+    if (int(nextStepAt - now) < 0)
     {
+      nextStepAt = now + (unsigned long)(30000U / (unsigned int)speed); // 60000 / 2
       footUp = !footUp;
       disp.writeDot(DOT_RESERVED, footUp);
       if (footUp)
@@ -210,7 +214,7 @@ void setup() {
   bool changeConfig = false;
   while ((millis() < 1000) || encbtn.isPressed())
   {
-    digitalWrite(PIN_BUZZER, millis() <= 250);
+    digitalWrite(PIN_BUZZER, millis() <= 200);
     disp.displayNextDigit();
     encbtn.check();
     if (encbtn.isPressed() && (encbtn.getPressedDuration() > longPressDelay))
@@ -447,9 +451,9 @@ void loop() {
         }
         if (r < 0)
         {
-          if (stepsRemaining < stepdiff)
+          if ((stepsRemaining - config.steps_min) < stepdiff)
           {
-            stepsRemaining = 0;
+            stepsRemaining = config.steps_min;
           }
           else
           {
