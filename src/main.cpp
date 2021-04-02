@@ -380,6 +380,7 @@ void SetState(States newstate) {
 void loop() {
   disp.displayNextDigit();
   encbtn.check();
+  disp.writeDot(DOT_LONGPRESS, encbtn.isPressed() && (encbtn.getPressedDuration() > longPressDelay));
 
   switch (state) {
     case States::Init:
