@@ -3,18 +3,37 @@
 
 Display::Display(unsigned char pin_clock, unsigned char pin_data, unsigned char pin_strobe, unsigned char pin_reset, unsigned char pin_enable)
 {
-  digitNum = 0;
-  blankScreen = false;
-  cursorPos = 0x80;
-  numberDisplayed = false;
-
   pin_ck = pin_clock;
   pin_di = pin_data;
   pin_st = pin_strobe;
   pin_mr = pin_reset;
   pin_en = pin_enable;
+  }
+
+Display::~Display()
+{
+  clear();
+  digitalWrite(pin_mr, LOW);
+  digitalWrite(pin_ck, LOW);
+  digitalWrite(pin_di, LOW);
+  digitalWrite(pin_st, LOW);
+  digitalWrite(pin_en, LOW);
+  pinMode(pin_ck, INPUT);
+  pinMode(pin_di, INPUT);
+  pinMode(pin_st, INPUT);
+  pinMode(pin_mr, INPUT);
+  pinMode(pin_en, INPUT);
+}
+
+void Display::begin()
+{
+  digitNum = 0;
+  blankScreen = false;
+  cursorPos = 0x80;
+  numberDisplayed = false;
 
   showScreen = !blankScreen;
+  clear();
   pinMode(pin_ck, OUTPUT);
   pinMode(pin_di, OUTPUT);
   pinMode(pin_st, OUTPUT);
@@ -25,16 +44,6 @@ Display::Display(unsigned char pin_clock, unsigned char pin_data, unsigned char 
   digitalWrite(pin_st, LOW);
   digitalWrite(pin_en, LOW);
   digitalWrite(pin_mr, HIGH);
-}
-
-Display::~Display()
-{
-  clear();
-  pinMode(pin_ck, INPUT);
-  pinMode(pin_di, INPUT);
-  pinMode(pin_st, INPUT);
-  pinMode(pin_mr, INPUT);
-  pinMode(pin_en, INPUT);
 }
 
 // Retourne 10 à la puissance value
@@ -70,47 +79,68 @@ void Display::displayNextDigit() {
   bool cursorBlinkOn = (millis() % CURSOR_BLINK_PERIOD) < (CURSOR_BLINK_PERIOD / 2);
   bool isDigit0 = (digitNum == 0);
 
-  if (isDigit0)
+  if (isDigit0 && (showScreen == blankScreen))
   {
-    showScreen = !blankScreen;
+    if (blankScreen)
+    {
+      digitalWrite(pin_en, LOW);
+      digitalWrite(pin_mr, HIGH);
+      for(int i=0; i<8; i++)
+      {
+        digitalWrite(pin_di, LOW);
+        digitalWrite(pin_ck, HIGH);
+        digitalWrite(pin_ck, LOW);
+      }
+      digitalWrite(pin_st, HIGH);
+      digitalWrite(pin_st, LOW);
+      digitalWrite(pin_mr, LOW);
+      showScreen = false;
+    }
+    else
+    {
+      showScreen = true;
+    }
   }
-  // Switch off the current digit
-  digitalWrite(pin_en, LOW);
-  digitalWrite(pin_mr, isDigit0);
-  if (cursorBlinkOn && (cursorPos == digitNum))
-  { // Cursor visible
-    digit = (digits[digitNum] & 0x01) | 0x10;
-  }
-  else
+  if (showScreen)
   {
-    digit = digits[digitNum];
+    // Switch off the current digit
+    digitalWrite(pin_en, LOW);
+    digitalWrite(pin_mr, isDigit0);
+    if (cursorBlinkOn && (cursorPos == digitNum))
+    { // Cursor visible
+      digit = (digits[digitNum] & 0x01) | 0x10;
+    }
+    else
+    {
+      digit = digits[digitNum];
+    }
+    // Send all segments serially
+    for(int i=0; i<8; i++)
+    {
+      digitalWrite(pin_di, bitRead(digit, i));
+      digitalWrite(pin_ck, HIGH);
+      digitalWrite(pin_ck, LOW);
+    }
+    // Strobe the shift register
+    digitalWrite(pin_st, HIGH);
+    digitalWrite(pin_st, LOW);
+    // Switch on the current digit if activated
+    digitalWrite(pin_en, showScreen);
+    delay(2);
+    digitNum++;
+    digitNum %= DIGIT_MAX;
   }
-  // Send all segments serially
-  for(int i=0; i<8; i++)
-  {
-    digitalWrite(pin_di, bitRead(digit, i));
-    digitalWrite(pin_ck, HIGH);
-    digitalWrite(pin_ck, LOW);
-  }
-  // Strobe the shift register
-  digitalWrite(pin_st, HIGH);
-  digitalWrite(pin_st, LOW);
-  // Switch on the current digit if activated
-  digitalWrite(pin_en, showScreen);
-  delay(2);
-  digitNum++;
-  digitNum %= DIGIT_MAX;
 }
 
-void Display::showCursor() {
+void Display::cursor() {
   cursorPos &= 0x7f;
 }
 
-void Display::hideCursor() {
+void Display::noCursor() {
   cursorPos |= 0x80;
 }
 
-bool Display::isCursorVisible() {
+bool Display::isCursor() {
   return !(cursorPos & 0x80);
 }
 
@@ -120,7 +150,7 @@ void Display::setCursor(unsigned char pos) {
 }
 
 void Display::moveCursor(bool left) {
-  showCursor();
+  cursor();
   if (left)
   {
     cursorPos++;
@@ -195,7 +225,7 @@ void Display::write(unsigned char pos, unsigned char* digit, unsigned char len) 
 }
 
 void Display::update() {
-  bool blank = !leadingZeros;
+  bool blank = !zeros;
   unsigned char p = DIGIT_MAX;
   do {
     p--;
@@ -212,19 +242,30 @@ void Display::update() {
   } while (p > 0);
 }
 
-void Display::showLeadingZeros() {
-  leadingZeros = true;
+void Display::leadingZeros() {
+  zeros = true;
   if (numberDisplayed)
   {
     update();
   }
 }
 
-void Display::hideLeadingZeros() {
-  leadingZeros = false;
+void Display::noLeadingZeros() {
+  zeros = false;
   if (numberDisplayed)
   {
     update();
   }
 }
 
+void Display::display() {
+  blankScreen = false;
+}
+
+void Display::noDisplay() {
+  blankScreen = true;
+}
+
+bool Display::isDisplay() {
+  return showScreen;
+}

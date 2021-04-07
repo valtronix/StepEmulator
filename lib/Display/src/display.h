@@ -35,35 +35,38 @@ const unsigned char segments[17] = {
 
 private:
     unsigned char digits[DIGIT_MAX], digitNum;
-    bool showScreen;
+    bool showScreen, blankScreen;
     unsigned char pin_en, pin_mr, pin_ck, pin_di, pin_st;
     unsigned char cursorPos;          // Position du curseur. Si le bit 7 est à 1, il n'est pas affiché.
     unsigned int valueDisplayed;
     unsigned int powerTen(unsigned char value);
     void update();
-    bool leadingZeros;
+    bool zeros;
     bool numberDisplayed;
 
 public:
-    bool blankScreen;
     Display(unsigned char pin_clock, unsigned char pin_data, unsigned char pin_strobe, unsigned char pin_reset, unsigned char pin_enable);
     ~Display();
-    void writeDot(unsigned char digit, bool value);
-    void showCursor();
-    void hideCursor();
-    bool isCursorVisible();
+    void begin();
+    void displayNextDigit();
+    void cursor();
+    void noCursor();
+    bool isCursor();
     unsigned char getCursor();
     void setCursor(unsigned char pos);
     void moveCursor(bool left);
-    void displayNextDigit();
     void write(unsigned int value);
     void write(unsigned char address, unsigned char value, bool hex);
     void write(unsigned char pos, unsigned char digit);
     void write(unsigned char pos, unsigned char* digit, unsigned char len);
+    void writeDot(unsigned char digit, bool value);
     void clear();
     void lampTest();
-    void showLeadingZeros();
-    void hideLeadingZeros();
+    void leadingZeros();
+    void noLeadingZeros();
+    void display();
+    void noDisplay();
+    bool isDisplay();
 };
 
 #endif
