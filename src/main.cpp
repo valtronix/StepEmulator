@@ -137,7 +137,6 @@ void onEncoderTurned() {
  */
 bool walk()
 {
-  static unsigned long stepAt = 0;
   static unsigned long nextStepAt = 0;
   static bool footUp = false;
   static bool walking = false;
@@ -153,7 +152,6 @@ bool walk()
       walking = true;
       myservo.attach(PIN_SERVO);
       footUp = false;
-      stepAt = now;
       nextStepAt = 0;
     }
     if (int(nextStepAt - now) < 0)
@@ -179,7 +177,6 @@ bool walk()
           disp.write(stepsRemaining);
         }
       }
-      stepAt = millis();
     }
   }
   return false;
