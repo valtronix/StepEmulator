@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <Servo.h>
 #include <EEPROM.h>
+#include <avr/sleep.h>
+#include <avr/power.h>
 
 #include <Display.h>
 #include <Button.h>
@@ -15,8 +17,9 @@
 #define PIN_SR_ST         7
 #define PIN_CD4017_MR     8
 #define PIN_DIGIT_ENA     9
-#define PIN_SERVO        10
+#define PIN_SERVO        10 // Only 9 or 10 is supported
 #define PIN_BUZZER       11
+#define PIN_POWER        12
 
 Servo myservo;
 Display disp(PIN_SR_CK, PIN_SR_DI, PIN_SR_ST, PIN_CD4017_MR, PIN_DIGIT_ENA);
@@ -182,7 +185,16 @@ bool walk()
   return false;
 }
 
+void powerOn()
+{
+  digitalWrite(PIN_POWER, HIGH);
+  delay(10);
+}
 
+void powerOff()
+{
+  digitalWrite(PIN_POWER, LOW);
+}
 
 /*****************************************************************************
  * Initialisation ------------------------------------------------------------
@@ -193,7 +205,8 @@ void setup() {
   Serial.begin(9600);
 #endif
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
+  pinMode(PIN_POWER, OUTPUT);
+  powerOn();
 
   rot = 0;
   lastUserInteractionAt = 0;
@@ -204,6 +217,7 @@ void setup() {
   digitalWrite(PIN_BUZZER, HIGH);
   pinMode(PIN_ENCA, INPUT);
   pinMode(PIN_ENCB, INPUT);
+  disp.begin();
   
   // Lamp test
   disp.lampTest();
@@ -243,7 +257,7 @@ void setup() {
     disp.write(address, value, true);
     myservo.write(value);
     disp.setCursor(3);
-    disp.showCursor();
+    disp.cursor();
     myservo.attach(PIN_SERVO);
     while (changeConfig)
     {
@@ -332,8 +346,8 @@ void setup() {
 
   // Clear all screen (including dots)
   disp.clear();
-  disp.hideCursor();
-  disp.hideLeadingZeros();
+  disp.noCursor();
+  disp.noLeadingZeros();
   disp.write(stepsRemaining);
 
   // timer1 (TCCR1) used by servo
@@ -350,16 +364,16 @@ void SetState(States newstate) {
       break;
     case AdjustSteps:
     // case ChangeSpeed:
-      disp.showCursor();
+      disp.cursor();
       break;
     case Emulate:
       // disp.setCursor(2);
       break;
     case PowerOff:
       digitalWrite(PIN_BUZZER, LOW);
-      disp.blankScreen = false;
       disp.clear();
-      disp.hideCursor();
+      disp.display();
+      disp.noCursor();
       disp.write(2, 0xfc); // O
       disp.write(1, 0x8e); // F
       disp.write(0, 0x8e); // F
@@ -374,29 +388,41 @@ void SetState(States newstate) {
   state = newstate;
 }
 
+void wakeUpInterrupt() {
+  // cancel sleep as a precaution
+  sleep_disable();
+  // precautionary while we do other stuff
+  detachInterrupt(digitalPinToInterrupt(PIN_ENCS));
+}
+
 /*****************************************************************************
  * Main loop -----------------------------------------------------------------
  *****************************************************************************/
 void loop() {
+  disp.writeDot(DOT_LONGPRESS, encbtn.isPressed() && (encbtn.getPressedDuration() > longPressDelay));
   disp.displayNextDigit();
   encbtn.check();
-  disp.writeDot(DOT_LONGPRESS, encbtn.isPressed() && (encbtn.getPressedDuration() > longPressDelay));
 
   switch (state) {
     case States::Init:
 #ifdef DEBUG_SER
       Serial.println("**Init");
 #endif
+      analogReference(INTERNAL);
       digitalWrite(PIN_BUZZER, LOW);
+      if (encbtn.isPressed())
+      {
+        encbtn.handled();
+      }
       stepsRemaining = config.steps_init;
       speed = config.speed_init;
       disp.clear();
-      disp.blankScreen = false;
-      disp.hideLeadingZeros();
-      disp.hideCursor();
+      disp.noLeadingZeros();
+      disp.noCursor();
       disp.setCursor(3);
       disp.write(stepsRemaining);
       disp.writeDot(DOT_STEP, true);
+      disp.display();
       SetState(States::SetSteps);
       break;
     case States::SetSteps:
@@ -477,7 +503,7 @@ void loop() {
       }
       else if ((millis() - lastUserInteractionAt) > setTimeout)
       { // If no user interaction
-        disp.hideCursor();
+        disp.noCursor();
         SetState(States::SetSteps);
       }
       break;
@@ -499,7 +525,7 @@ void loop() {
         disp.writeDot(DOT_SPEED, true);
         disp.write(speed);
         // disp.setCursor(0);
-        // disp.showCursor();
+        // disp.cursor();
         SetState(States::ChangeSpeed);
         lastUserInteractionAt = millis();
       }
@@ -507,7 +533,7 @@ void loop() {
       {
         if (walk())
         {
-          disp.showLeadingZeros();
+          disp.leadingZeros();
           SetState(States::Finished);
         }
       }
@@ -521,7 +547,7 @@ void loop() {
         }
         else
         {
-          disp.hideCursor();
+          disp.noCursor();
           disp.write(stepsRemaining);
           disp.writeDot(DOT_SPEED, false);
           disp.writeDot(DOT_STEP, true);
@@ -532,8 +558,8 @@ void loop() {
       {
         if (walk())
         {
-          disp.hideCursor();
-          disp.showLeadingZeros();
+          disp.noCursor();
+          disp.leadingZeros();
           disp.write(stepsRemaining);
           disp.writeDot(DOT_SPEED, false);
           disp.writeDot(DOT_STEP, true);
@@ -565,7 +591,7 @@ void loop() {
         }
         else if ((millis() - lastUserInteractionAt) > setTimeout)
         { // If no user interaction
-          disp.hideCursor();
+          disp.noCursor();
           disp.write(stepsRemaining);
           disp.writeDot(DOT_SPEED, false);
           disp.writeDot(DOT_STEP, true);
@@ -582,13 +608,20 @@ void loop() {
         }
         else
         {
-          disp.blankScreen = false;
+          disp.display();
           SetState(States::Emulate);
         }
       }
       else
       {
-        disp.blankScreen = ((millis() % 500) < 250);
+        if ((millis() % 500) < 250)
+        {
+          disp.noDisplay();
+        }
+        else
+        {
+          disp.display();
+        }
       }
       break;
     case States::Finished:
@@ -602,13 +635,14 @@ void loop() {
       }
       else
       {
-        disp.blankScreen = ((millis() % 500) < 250);
-        if (disp.blankScreen)
+        if ((millis() % 500) < 250)
         {
+          disp.noDisplay();
           digitalWrite(PIN_BUZZER, HIGH);
         }
         else
         {
+          disp.display();
           digitalWrite(PIN_BUZZER, LOW);
         }
       }
@@ -617,13 +651,63 @@ void loop() {
       if (encbtn.isPressed())
       {
         encbtn.handled();
-        digitalWrite(LED_BUILTIN, HIGH);
+        powerOn();
         SetState(States::Init);
       }
       else if ((millis() - lastUserInteractionAt) > (unsigned long)(config.delay_offmsg * 100))
       {
-        disp.clear();
-        digitalWrite(LED_BUILTIN, LOW);
+        disp.noDisplay();
+        if (!disp.isDisplay())
+        {
+          digitalWrite(PIN_BUZZER, LOW);
+          if (myservo.attached())
+          {
+            myservo.detach();
+          }
+          digitalWrite(PIN_SERVO, LOW);
+          powerOff(); // Power off external components
+
+          analogReference(DEFAULT);
+          byte old_ADCSRA = ADCSRA;
+          ADCSRA = 0; // disable ADC
+          set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+          sleep_enable();
+          
+          // Do not interrupt before we go to sleep, or the
+          // ISR will detach interrupts and we won't wake.
+          noInterrupts ();
+
+          power_all_disable();  // turn off various modules
+
+          // will be called when PIN_ENCS goes low
+          attachInterrupt(digitalPinToInterrupt(PIN_ENCS), wakeUpInterrupt, FALLING);
+          EIFR = bit (digitalPinToInterrupt(PIN_ENCS));  // clear flag for interrupt 0 or 1
+
+          // turn off brown-out enable in software
+          // BODS must be set to one and BODSE must be set to zero within four clock cycles
+          MCUCR = bit (BODS) | bit (BODSE);
+          // The BODS bit is automatically cleared after three clock cycles
+          MCUCR = bit (BODS); 
+
+          digitalWrite(LED_BUILTIN, HIGH);
+          // We are guaranteed that the sleep_cpu call will be done
+          // as the processor executes the next instruction after
+          // interrupts are turned on.
+          interrupts ();  // one cycle
+          sleep_cpu ();   // one cycle
+
+          // Here we are sleeping --- Zzzz Zzzz Zzzz Zzzz Zzzz Zzzz Zzzz
+          // Waiting RESET or interrupt on INT0 (pin 2 = PIN_ENCS)
+
+
+          digitalWrite(LED_BUILTIN, LOW);
+
+          power_all_enable ();   // enable modules again
+          ADCSRA = old_ADCSRA;   // re-enable ADC conversion
+
+          powerOn();  // Power on external components
+          SetState(States::Init);
+        }
       }
       break;
   }
